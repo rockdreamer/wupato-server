@@ -34,6 +34,10 @@ func main() {
 	r.Handle("/", handlers.CombinedLoggingHandler(os.Stdout, &templateHandler{filename: "index.html"}))
 	s := http.StripPrefix("/static/", http.FileServer(http.Dir("./static/")))
 	r.PathPrefix("/static/").Handler(handlers.CombinedLoggingHandler(os.Stdout, s))
+
+	currentGame := newGame()
+	r.Handle("/game", handlers.CombinedLoggingHandler(os.Stdout, currentGame))
+	go currentGame.run()
 	// start the web server
 	if err := http.ListenAndServe(":8080", r); err != nil {
 		log.Fatal("ListenAndServe:", err)
