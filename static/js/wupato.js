@@ -123,27 +123,82 @@ function randomPiece() {
   return { type: type, dir: DIR.UP, x: Math.round(random(0, nx - type.size)), y: 0 };
 }
 
+var socket = null;
+var msgBox = null;
+var messages = null;
+function connectToSocket() {
 
+  if (!window["WebSocket"]) {
+   alert("Error: Your browser does not support web sockets.");
+ } else {
+   socket = new WebSocket("ws://localhost:8080/game");
+   socket.onopen = function() {
+    afterConnectToSocket();
+   }
+   socket.onclose = function() {
+     alert("Connection has been closed.");
+   }
+   socket.onmessage = function(e) {
+     var msg = eval("("+e.data+")");
+     messages.append($("<li>").text(JSON.stringify(msg)));
+   }
+ }
+}
+
+function sendGameCommand(command, commanddata) {
+  if (!socket){
+    console.log("Cannot send to socket yet");
+  } else {
+    socket.send(
+      JSON.stringify({
+        "command":command,
+        "data": commanddata
+      })
+      );      
+  }
+}
+
+function connectChatBox() {
+  $("#chatbox").submit(function(){
+             if (!msgBox.val()) return false;
+             if (!socket) {
+               alert("Error: There is no socket connection.");
+               return false;
+             }
+             socket.send(msgBox.val());
+             msgBox.val("");
+             return false;
+           });
+}
 //-------------------------------------------------------------------------
 // GAME LOOP
 //-------------------------------------------------------------------------
 
 function run() {
 
+
   showStats(); // initialize FPS counter
   addEvents(); // attach keydown and resize events
-
-  var last = now = timestamp();
-  function frame() {
-    now = timestamp();
-    update(Math.min(1, (now - last) / 1000.0)); // using requestAnimationFrame have to be able to handle large delta's caused when it 'hibernates' in a background or non-visible tab
-    draw();
-    stats.update();
-    last = now;
-    requestAnimationFrame(frame, canvas);
-  }
+  connectChatBox();
+  connectToSocket();
+  msgBox = $("#chatbox textarea");
+  messages = $("#messages");
 
   resize(); // setup all our sizing information
+
+}
+
+var last = now = timestamp();
+function frame() {
+  now = timestamp();
+  update(Math.min(1, (now - last) / 1000.0)); // using requestAnimationFrame have to be able to handle large delta's caused when it 'hibernates' in a background or non-visible tab
+  draw();
+  stats.update();
+  last = now;
+  requestAnimationFrame(frame, canvas);
+  }
+
+function afterConnectToSocket(){
   reset();  // reset the per-game variables
   frame();  // start the first frame
 
@@ -174,11 +229,11 @@ function keydown(ev) {
   var handled = false;
   if (playing) {
     switch(ev.keyCode) {
-      case KEY.LEFT:   actions.push(DIR.LEFT);  handled = true; break;
-      case KEY.RIGHT:  actions.push(DIR.RIGHT); handled = true; break;
-      case KEY.UP:     actions.push(DIR.UP);    handled = true; break;
-      case KEY.DOWN:   actions.push(DIR.DOWN);  handled = true; break;
-      case KEY.ESC:    lose();                  handled = true; break;
+      case KEY.LEFT:   actions.push(DIR.LEFT);  sendGameCommand("left", null); handled = true; break;
+      case KEY.RIGHT:  actions.push(DIR.RIGHT); sendGameCommand("right", null); handled = true; break;
+      case KEY.UP:     actions.push(DIR.UP);    sendGameCommand("up", null); handled = true; break;
+      case KEY.DOWN:   actions.push(DIR.DOWN);  sendGameCommand("down", null); handled = true; break;
+      case KEY.ESC:    lose();                  sendGameCommand("gameexit", null); handled = true; break;
     }
   }
   else if (ev.keyCode == KEY.SPACE) {
@@ -193,12 +248,33 @@ function keydown(ev) {
 // GAME LOGIC
 //-------------------------------------------------------------------------
 
-function play() { hide('start'); reset();          playing = true;  }
-function lose() { show('start'); setVisualScore(); playing = false; }
+function play() { 
+  hide('start'); 
+  reset();          
+  playing = true;  
+}
 
-function setVisualScore(n)      { vscore = n || score; invalidateScore(); }
-function setScore(n)            { score = n; setVisualScore(n);  }
-function addScore(n)            { score = score + n;   }
+function lose() { 
+  sendGameCommand("boardFull", score)
+  show('start'); 
+  setVisualScore(); 
+  playing = false; 
+}
+
+function setVisualScore(n)      { 
+  vscore = n || score; 
+  invalidateScore(); 
+}
+function setScore(n)            { 
+  score = n; 
+  sendGameCommand("scoreUpdate", score)
+  setVisualScore(n);  
+}
+function addScore(n)            { 
+  score = score + n;   
+  sendGameCommand("scoreUpdate", score)
+}
+
 function clearScore()           { setScore(0); }
 function clearRows()            { setRows(0); }
 function setRows(n)             { rows = n; step = Math.max(speed.min, speed.start - (speed.decrement*rows)); invalidateRows(); }
@@ -207,8 +283,31 @@ function getBlock(x,y)          { return (blocks && blocks[x] ? blocks[x][y] : n
 function setBlock(x,y,type)     { blocks[x] = blocks[x] || []; blocks[x][y] = type; invalidate(); }
 function clearBlocks()          { blocks = []; invalidate(); }
 function clearActions()         { actions = []; }
-function setCurrentPiece(piece) { current = piece || randomPiece(); invalidate();     }
-function setNextPiece(piece)    { next    = piece || randomPiece(); invalidateNext(); }
+
+function setCurrentPiece(piece) { 
+  current = piece || randomPiece(); 
+  if (current) {
+  sendGameCommand("pieceEntered", { 
+    "x": current.x,
+    "y": current.y,
+    "type": current.type,
+    "direction": current.dir
+  });    
+  invalidate();     
+  }
+}
+
+function setNextPiece(piece)    { 
+  next    = piece || randomPiece(); 
+  if (next){
+  sendGameCommand("nextPiece", { 
+    "x": next.x,
+    "y": next.y,
+    "type": next.type
+  });    
+  invalidateNext();
+  } 
+}
 
 function reset() {
   dt = 0;
@@ -283,6 +382,12 @@ function drop() {
 }
 
 function dropPiece() {
+  sendGameCommand("pieceFixed", { 
+    "x": current.x,
+    "y": current.y,
+    "type": current.type,
+    "direction": current.dir
+  }); 
   eachblock(current.type, current.x, current.y, current.dir, function(x, y) {
     setBlock(x, y, current.type);
   });
@@ -309,6 +414,7 @@ function removeLines() {
 }
 
 function removeLine(n) {
+  sendGameCommand("removeline", n); 
   var x, y;
   for(y = n ; y >= 0 ; --y) {
     for(x = 0 ; x < nx ; ++x)
